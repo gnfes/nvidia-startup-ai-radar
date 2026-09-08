@@ -15,5 +15,7 @@ Thumbs.db
 .env
 .env.local
 
-# AI pairing context — local-only, not part of the shared repo
-CLAUDE.md
+# AI pairing context — local-only from here on, not part of the shared repo.
+# Anchored to root: a bare `CLAUDE.md` pattern matches at any depth and would
+# also swallow frontend/CLAUDE.md (an unrelated Next.js tooling pointer file).
+/CLAUDE.md
