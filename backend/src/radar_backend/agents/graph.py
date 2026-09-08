@@ -4,18 +4,20 @@
   -> Evidence Validator -(retry)-> Retriever
                          -(continue)-> NVIDIA RAG -> Recommendation -> Briefing
 
-Node functions here are stubs — each is wired into the graph with the right
+Nodes are filled in one at a time. Real so far: Retriever (Postgres search
+over startups/documentos) and NVIDIA RAG (rag/retrieve.py's hybrid_search).
+The rest are still stubs — each is wired into the graph with the right
 state in/out shape and a docstring naming what it will actually do, but no
-real DB/LLM calls yet. Filled in one node at a time in later commits, built
-on top of the retrieval work already in rag/retrieve.py.
+LLM call yet (they all need NVIDIA NIM, not yet integrated in this package).
 """
 
 from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from radar_backend.agents.state import AgentState, SearchCriteria, new_startup_analysis
+from radar_backend.agents.state import AgentState, NvidiaChunkMatch, SearchCriteria, new_startup_analysis
 from radar_backend.db.session import get_connection
+from radar_backend.rag.retrieve import RetrievedChunk, hybrid_search
 
 MAX_RETRIES = 1  # bounded single retry — see project decision notes
 RETRIEVER_TOP_K_STARTUPS = 10
@@ -23,6 +25,7 @@ RETRIEVER_TOP_K_STARTUPS = 10
 # a retry pass drops the cap and fetches everything that startup has —
 # the "broadened query" the Evidence Validator's retry loop relies on.
 RETRIEVER_DOCS_PER_STARTUP = 5
+NVIDIA_RAG_TOP_N = 5  # chunks per startup
 
 
 def query_planner(state: AgentState) -> dict:
@@ -194,12 +197,43 @@ def needs_retry(state: AgentState) -> str:
     return "continue"
 
 
-def nvidia_rag(state: AgentState) -> dict:
-    """Runs rag/retrieve.py's hybrid_search per startup, scoped to the
-    startup's profile/classification, to find matching NVIDIA KB chunks.
-    Stub: no-op per startup.
+def _build_nvidia_query(state: AgentState, startup: dict) -> str:
+    """Query text for the NVIDIA KB search. Prefers the Extractor's
+    `structured_profile` (once that node is filled in) since it's the most
+    specific signal about the startup's actual stack/gaps; until then, falls
+    back to the startup's own descricao_curta/setor plus the raw user query.
     """
-    return {"startups": state["startups"]}
+    profile = startup.get("structured_profile")
+    if profile:
+        return " ".join(str(value) for value in profile.values() if value)
+    row = startup.get("startup_row") or {}
+    parts = [row.get("descricao_curta"), row.get("setor"), state.get("user_query")]
+    return " ".join(part for part in parts if part)
+
+
+def _chunk_to_match(chunk: RetrievedChunk) -> NvidiaChunkMatch:
+    return NvidiaChunkMatch(
+        id=chunk.id,
+        fonte_titulo=chunk.fonte_titulo,
+        url_fonte=chunk.url_fonte,
+        secao=chunk.secao,
+        conteudo_chunk=chunk.conteudo_chunk,
+        relevance_score=chunk.relevance_score,
+    )
+
+
+def nvidia_rag(state: AgentState) -> dict:
+    """Runs rag/retrieve.py's hybrid_search per startup, scoped to whatever
+    profile signal is available for it, to find matching NVIDIA KB chunks.
+    """
+    updated = []
+    for startup in state["startups"]:
+        query_text = _build_nvidia_query(state, startup)
+        chunks = hybrid_search(query_text, top_n=NVIDIA_RAG_TOP_N) if query_text else []
+        startup = dict(startup)
+        startup["nvidia_chunks"] = [_chunk_to_match(chunk) for chunk in chunks]
+        updated.append(startup)
+    return {"startups": updated}
 
 
 def recommendation(state: AgentState) -> dict:
