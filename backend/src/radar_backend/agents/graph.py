@@ -14,9 +14,15 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from radar_backend.agents.state import AgentState
+from radar_backend.agents.state import AgentState, SearchCriteria, new_startup_analysis
+from radar_backend.db.session import get_connection
 
 MAX_RETRIES = 1  # bounded single retry — see project decision notes
+RETRIEVER_TOP_K_STARTUPS = 10
+# Initial pass ranks each startup's documentos by relevance and caps them;
+# a retry pass drops the cap and fetches everything that startup has —
+# the "broadened query" the Evidence Validator's retry loop relies on.
+RETRIEVER_DOCS_PER_STARTUP = 5
 
 
 def query_planner(state: AgentState) -> dict:
@@ -26,17 +32,127 @@ def query_planner(state: AgentState) -> dict:
     return {"search_criteria": {}, "analysis_strategy": None}
 
 
+def _search_startups(criteria: SearchCriteria) -> list[dict]:
+    """Structured + lexical search over `startups` (no embeddings on this
+    table — that's only nvidia_kb_chunks; here it's plain SQL filters plus
+    full-text search over descricao_curta/documentos for palavras_chave and
+    sinais_ia). Empty criteria matches everything, capped at the top-k.
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    if criteria.get("setor"):
+        conditions.append("setor ilike %s")
+        params.append(f"%{criteria['setor']}%")
+    if criteria.get("estagio"):
+        conditions.append("estagio ilike %s")
+        params.append(f"%{criteria['estagio']}%")
+    if criteria.get("porte"):
+        # no dedicated "porte" column — tamanho_time (team size) is the
+        # closest proxy the schema has.
+        conditions.append("tamanho_time ilike %s")
+        params.append(f"%{criteria['porte']}%")
+
+    keywords = [*(criteria.get("palavras_chave") or []), *(criteria.get("sinais_ia") or [])]
+    if keywords:
+        query_text = " or ".join(keywords)  # websearch_to_tsquery honors "or" as boolean OR
+        conditions.append(
+            """(
+                to_tsvector('portuguese', coalesce(descricao_curta, ''))
+                    @@ websearch_to_tsquery('portuguese', %s)
+                or id in (
+                    select startup_id from documentos
+                    where to_tsvector('portuguese', titulo || ' ' || conteudo_texto)
+                        @@ websearch_to_tsquery('portuguese', %s)
+                )
+            )"""
+        )
+        params.extend([query_text, query_text])
+
+    where_clause = " and ".join(conditions) if conditions else "true"
+    params.append(RETRIEVER_TOP_K_STARTUPS)
+
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            select id, nome, site, setor, estagio, localizacao, descricao_curta,
+                   ano_fundacao, tamanho_time
+            from startups
+            where {where_clause}
+            limit %s
+            """,
+            params,
+        )
+        columns = [col.name for col in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def _fetch_documentos(startup_id: str, keywords: list[str], *, all_docs: bool) -> list[dict]:
+    """Evidence docs for one startup. Ranked-and-capped on the initial pass;
+    `all_docs=True` (the retry pass) drops both the ranking and the cap.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        if all_docs or not keywords:
+            cur.execute(
+                """
+                select id, tipo, titulo, conteudo_texto, url_fonte, data_publicacao
+                from documentos
+                where startup_id = %s
+                order by data_publicacao desc nulls last
+                """,
+                (startup_id,),
+            )
+        else:
+            query_text = " or ".join(keywords)
+            cur.execute(
+                """
+                select id, tipo, titulo, conteudo_texto, url_fonte, data_publicacao
+                from documentos
+                where startup_id = %s
+                order by ts_rank(
+                    to_tsvector('portuguese', titulo || ' ' || conteudo_texto),
+                    websearch_to_tsquery('portuguese', %s)
+                ) desc
+                limit %s
+                """,
+                (startup_id, query_text, RETRIEVER_DOCS_PER_STARTUP),
+            )
+        columns = [col.name for col in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def retriever(state: AgentState) -> dict:
     """Selects candidate startups + evidence `documentos` from Postgres per
-    `search_criteria` (hybrid_search-style, mirroring rag/retrieve.py but
-    over `startups`/`documentos` instead of `nvidia_kb_chunks`). On a retry
-    pass (any startup with `evidence_validated=False`), only re-searches for
-    those startups, with a broadened query (drop threshold / raise top-k),
-    and increments their `retry_count` — this node owns that counter, since
-    it's the one spending a retry attempt; `evidence_validator` only ever
-    reads it. Stub: passes the batch through unchanged.
+    `search_criteria`. On the initial pass, searches `startups` and pulls
+    each match's top-ranked docs. On a retry pass (any startup left with
+    `evidence_validated=False` by the Validator), re-fetches only those
+    startups' docs — uncapped and unranked this time — and bumps their
+    `retry_count`; this node owns that counter since it's the one spending
+    the retry attempt (`evidence_validator` only ever reads it).
     """
-    return {"startups": state.get("startups", [])}
+    criteria: SearchCriteria = state.get("search_criteria") or {}
+    keywords = [*(criteria.get("palavras_chave") or []), *(criteria.get("sinais_ia") or [])]
+
+    if not state.get("startups"):
+        rows = _search_startups(criteria)
+        startups = [
+            new_startup_analysis(
+                startup_id=row["id"],
+                startup_row=row,
+                documentos=_fetch_documentos(row["id"], keywords, all_docs=False),
+            )
+            for row in rows
+        ]
+        return {"startups": startups}
+
+    updated = []
+    for startup in state["startups"]:
+        if not startup.get("evidence_validated"):
+            startup = dict(startup)
+            startup["documentos"] = _fetch_documentos(startup["startup_id"], keywords, all_docs=True)
+            startup["retry_count"] = startup.get("retry_count", 0) + 1
+        updated.append(startup)
+    return {"startups": updated}
 
 
 def extractor(state: AgentState) -> dict:
