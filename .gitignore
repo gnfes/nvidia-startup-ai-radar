@@ -1,0 +1,19 @@
+# This is a monorepo — backend/ and frontend/ each keep their own .gitignore
+# for language-specific rules. This root file only covers cross-cutting,
+# repo-wide concerns so patterns don't accidentally collide between the two
+# (e.g. a Python-style bare `lib/` rule swallowing frontend/src/lib).
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Env files (never commit secrets; each app's *.env.example stays tracked)
+.env
+.env.local
+
+# AI pairing context — local-only, not part of the shared repo
+CLAUDE.md
