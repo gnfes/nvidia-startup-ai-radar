@@ -24,11 +24,20 @@ frontend/   Dashboard em Next.js (gerenciado com npm)
 
 ## Como rodar
 
+### Banco de dados (Supabase)
+
+1. Crie um projeto em [supabase.com](https://supabase.com) (região São Paulo/`sa-east-1` recomendada).
+2. No **SQL Editor** do projeto, rode os arquivos abaixo **nesta ordem** (cole o conteúdo completo de cada um e clique em Run):
+   - `backend/db/migrations/0001_startups_documentos.sql` — cria as tabelas `startups`/`documentos` e configura RLS.
+   - `backend/db/seed/manual_seed.sql` — 8 startups curadas manualmente.
+   - `backend/db/seed/scraped_batch.sql` — 23 startups adicionais, coletadas pelo pipeline em `backend/src/radar_backend/ingestion/`.
+3. Pegue a connection string em **Connect → Direct connection/Session pooler → URI**. **Use a Session pooler** (porta 5432, host `aws-0-<região>.pooler.supabase.com`), não a "Direct connection": o hostname da Direct connection só tem registro DNS IPv6, e falha em redes sem IPv6 (comum em conexões domésticas no Brasil).
+
 ### Backend
 
 ```bash
 cd backend
-cp .env.example .env   # preencha DATABASE_URL, NVIDIA_API_KEY, COHERE_API_KEY
+cp .env.example .env   # preencha DATABASE_URL (connection string do passo acima), NVIDIA_API_KEY, COHERE_API_KEY
 uv sync
 uv run uvicorn radar_backend.main:app --reload
 ```

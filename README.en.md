@@ -23,11 +23,20 @@ frontend/   Next.js dashboard (npm-managed)
 
 ## Getting started
 
+### Database (Supabase)
+
+1. Create a project at [supabase.com](https://supabase.com) (São Paulo/`sa-east-1` region recommended).
+2. In the project's **SQL Editor**, run the files below **in this order** (paste each file's full contents and click Run):
+   - `backend/db/migrations/0001_startups_documentos.sql` — creates the `startups`/`documentos` tables and sets up RLS.
+   - `backend/db/seed/manual_seed.sql` — 8 hand-curated startups.
+   - `backend/db/seed/scraped_batch.sql` — 23 more startups, collected via the pipeline in `backend/src/radar_backend/ingestion/`.
+3. Get the connection string from **Connect → Direct connection/Session pooler → URI**. **Use the Session pooler** (port 5432, host `aws-0-<region>.pooler.supabase.com`), not "Direct connection": that hostname only has an IPv6 DNS record and fails to resolve on networks without IPv6 (common on many home networks).
+
 ### Backend
 
 ```bash
 cd backend
-cp .env.example .env   # fill in DATABASE_URL, NVIDIA_API_KEY, COHERE_API_KEY
+cp .env.example .env   # fill in DATABASE_URL (connection string from above), NVIDIA_API_KEY, COHERE_API_KEY
 uv sync
 uv run uvicorn radar_backend.main:app --reload
 ```
