@@ -31,6 +31,8 @@ frontend/   Dashboard em Next.js (gerenciado com npm)
    - `backend/db/migrations/0001_startups_documentos.sql` — cria as tabelas `startups`/`documentos` e configura RLS.
    - `backend/db/seed/manual_seed.sql` — 8 startups curadas manualmente.
    - `backend/db/seed/scraped_batch.sql` — 23 startups adicionais, coletadas pelo pipeline em `backend/src/radar_backend/ingestion/`.
+   - `backend/db/migrations/0002_nvidia_kb.sql` — cria a tabela `nvidia_kb_chunks` (pgvector + tsvector) para a base de conhecimento NVIDIA.
+   - `backend/db/seed/nvidia_kb_seed.sql` — 520 chunks (24 fontes do brief §8), com embeddings. **~10MB**: o SQL Editor web pode travar nesse tamanho — prefira rodar via `psql` ou `psycopg` (veja `backend/src/radar_backend/rag/nvidia_kb.py`).
 3. Pegue a connection string em **Connect → Direct connection/Session pooler → URI**. **Use a Session pooler** (porta 5432, host `aws-0-<região>.pooler.supabase.com`), não a "Direct connection": o hostname da Direct connection só tem registro DNS IPv6, e falha em redes sem IPv6 (comum em conexões domésticas no Brasil).
 
 ### Backend

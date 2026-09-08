@@ -12,6 +12,7 @@ dependencies = [
     "cohere>=7.0.9",
     "fastapi>=0.141.1",
     "langchain-core>=1.6.0",
+    "langchain-text-splitters>=1.1.2",
     "langgraph>=1.2.11",
     "openai>=3.3.1",
     "pgvector>=0.5.0",
@@ -20,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
     "uvicorn[standard]>=0.52.4",
+    "yt-dlp>=2026.8.19",
 ]
 
 [build-system]
