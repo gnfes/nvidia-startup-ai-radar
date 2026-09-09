@@ -40,8 +40,23 @@ class NvidiaChunkMatch(TypedDict):
     relevance_score: float | None
 
 
+class RuleMatch(TypedDict):
+    """One deterministic rule hit from agents.rules.match_rules — a NVIDIA
+    product whose keyword signals appeared in the startup's profile text.
+    """
+
+    produto: str
+    sinais_correspondentes: list[str]
+
+
 class Recommendation(TypedDict):
-    """Recommendation Agent output — exact shape required by brief §5.5."""
+    """Recommendation Agent output — brief §5.5's required fields, plus two
+    Phase 8 additions from the deterministic rule cross-check (additive,
+    doesn't change or remove any §5.5 field): `concordancia_regras` (products
+    both the LLM and the rule table agreed on) and `alertas_regras`
+    (products the rule table flagged that the LLM's recommendation missed —
+    a candidate false negative to review manually).
+    """
 
     tecnologias_recomendadas: list[str]
     justificativa_tecnica: str
@@ -50,6 +65,8 @@ class Recommendation(TypedDict):
     complexidade_implementacao: ComplexityLevel
     proxima_acao: str
     evidencias: list[NvidiaChunkMatch]
+    concordancia_regras: list[str]
+    alertas_regras: list[str]
 
 
 class StartupAnalysis(TypedDict, total=False):
@@ -73,6 +90,9 @@ class StartupAnalysis(TypedDict, total=False):
     evidence_validated: bool
     evidence_notes: str | None
     retry_count: int  # bounded at 1 — see graph.py's Validator routing
+
+    # Rule Matcher (Phase 8 diferencial — deterministic cross-check)
+    regras_correspondentes: list[RuleMatch]
 
     # NVIDIA RAG
     nvidia_chunks: list[NvidiaChunkMatch]
@@ -106,6 +126,7 @@ def new_startup_analysis(startup_id: str, startup_row: dict, documentos: list[di
         evidence_validated=False,
         evidence_notes=None,
         retry_count=0,
+        regras_correspondentes=[],
         nvidia_chunks=[],
         recommendation=None,
     )

@@ -46,6 +46,15 @@ export type Recommendation = {
   complexidade_implementacao: "baixa" | "media" | "alta";
   proxima_acao: string;
   evidencias: NvidiaChunkMatch[];
+  // Phase 8 diferencial: cross-check against a deterministic keyword-rule
+  // table, independent of the LLM (see backend agents/rules.py).
+  concordancia_regras: string[];
+  alertas_regras: string[];
+};
+
+export type RuleMatch = {
+  produto: string;
+  sinais_correspondentes: string[];
 };
 
 export type StartupAnalysis = {
@@ -55,6 +64,7 @@ export type StartupAnalysis = {
   classification_reasoning: string | null;
   evidence_validated: boolean;
   evidence_notes: string | null;
+  regras_correspondentes: RuleMatch[];
   recommendation: Recommendation | null;
 };
 

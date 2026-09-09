@@ -94,6 +94,25 @@ function StartupResultCard({ analysis }: { analysis: StartupAnalysis }) {
                 </ul>
               </div>
             )}
+            {(rec.concordancia_regras.length > 0 || rec.alertas_regras.length > 0) && (
+              <div>
+                <div className="mb-1 font-mono text-[10px] tracking-wider text-primary/80 uppercase">
+                  Verificação cruzada (regras determinísticas)
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {rec.concordancia_regras.map((produto) => (
+                    <Badge key={produto} variant="outline" className="border-primary/60 text-primary">
+                      ✓ confirmado: {produto}
+                    </Badge>
+                  ))}
+                  {rec.alertas_regras.map((produto) => (
+                    <Badge key={produto} variant="destructive">
+                      ⚠ regra sugere revisar: {produto}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <p className="text-muted-foreground">Sem recomendação gerada para esta startup.</p>
