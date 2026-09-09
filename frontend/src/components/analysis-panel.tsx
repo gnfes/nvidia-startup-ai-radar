@@ -27,6 +27,9 @@ const PRIORITY_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
 
 function StartupResultCard({ analysis }: { analysis: StartupAnalysis }) {
   const { startup_row: startup, recommendation: rec } = analysis;
+  const sinaisPorProduto = new Map(
+    analysis.regras_correspondentes.map((m) => [m.produto, m.sinais_correspondentes])
+  );
 
   return (
     <Card className="border-t-2 border-t-primary">
@@ -92,6 +95,34 @@ function StartupResultCard({ analysis }: { analysis: StartupAnalysis }) {
                     </li>
                   ))}
                 </ul>
+              </div>
+            )}
+            {(rec.concordancia_regras.length > 0 || rec.alertas_regras.length > 0) && (
+              <div>
+                <div className="mb-1 font-mono text-[10px] tracking-wider text-primary/80 uppercase">
+                  Verificação cruzada (regras determinísticas)
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {rec.concordancia_regras.map((produto) => (
+                    <div key={produto} className="flex flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="border-primary/60 text-primary">
+                        ✓ confirmado: {produto}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        sinais: {(sinaisPorProduto.get(produto) ?? []).join(", ")}
+                      </span>
+                    </div>
+                  ))}
+                  {rec.alertas_regras.map((produto) => (
+                    <div key={produto} className="flex flex-wrap items-center gap-1.5">
+                      <Badge variant="destructive">⚠ sinal não confirmado: {produto}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        sinais: {(sinaisPorProduto.get(produto) ?? []).join(", ")} — pode ser uma
+                        lacuna real ou um sinal genérico; vale conferir
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </>
