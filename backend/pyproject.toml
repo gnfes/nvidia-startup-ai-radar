@@ -1,0 +1,29 @@
+[project]
+name = "radar-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "guilherme.silva", email = "guilherme.silva@sou.inteli.edu.br" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "cohere>=7.0.9",
+    "fastapi>=0.141.1",
+    "langchain-core>=1.6.0",
+    "langchain-text-splitters>=1.1.2",
+    "langgraph>=1.2.11",
+    "openai>=3.3.1",
+    "pgvector>=0.5.0",
+    "psycopg[binary]>=3.3.4",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
+    "uvicorn[standard]>=0.52.4",
+    "yt-dlp>=2026.8.19",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
