@@ -83,38 +83,73 @@ def _search_startups(criteria: SearchCriteria) -> list[dict]:
     """Structured + lexical search over `startups` (no embeddings on this
     table — that's only nvidia_kb_chunks; here it's plain SQL filters plus
     full-text search over descricao_curta/documentos for palavras_chave and
-    sinais_ia). Empty criteria matches everything, capped at the top-k.
+    sinais_ia). Empty criteria matches everything; results are ranked by a
+    relevance score (structured-field hits + text-match strength) and
+    capped at the top-k — `limit` with no ranking would just return
+    whichever k rows Postgres happens to scan first, which in practice
+    favors whichever startups were inserted earliest regardless of query
+    relevance (invisible at 31 rows; caught when the dataset grew to 50+
+    and every newly-added startup was starved out of every broad query).
+
+    Uses named (%(...)s) params so each value is bound once and referenced
+    from both the WHERE clause and the score expression without keeping two
+    positional param lists in sync by hand.
     """
     conditions: list[str] = []
-    params: list = []
+    score_parts: list[str] = []
+    params: dict[str, object] = {}
 
     if criteria.get("setor"):
-        conditions.append("setor ilike %s")
-        params.append(f"%{criteria['setor']}%")
+        params["setor"] = f"%{criteria['setor']}%"
+        conditions.append("setor ilike %(setor)s")
+        score_parts.append("(case when setor ilike %(setor)s then 1 else 0 end)")
     if criteria.get("estagio"):
-        conditions.append("estagio ilike %s")
-        params.append(f"%{criteria['estagio']}%")
+        params["estagio"] = f"%{criteria['estagio']}%"
+        conditions.append("estagio ilike %(estagio)s")
+        score_parts.append("(case when estagio ilike %(estagio)s then 1 else 0 end)")
     if criteria.get("porte"):
         # no dedicated "porte" column — tamanho_time (team size) is the
         # closest proxy the schema has.
-        conditions.append("tamanho_time ilike %s")
-        params.append(f"%{criteria['porte']}%")
+        params["porte"] = f"%{criteria['porte']}%"
+        conditions.append("tamanho_time ilike %(porte)s")
+        score_parts.append("(case when tamanho_time ilike %(porte)s then 1 else 0 end)")
 
     keywords = [*(criteria.get("palavras_chave") or []), *(criteria.get("sinais_ia") or [])]
     if keywords:
-        query_text = " or ".join(keywords)  # websearch_to_tsquery honors "or" as boolean OR
+        params["keywords"] = " or ".join(keywords)  # websearch_to_tsquery honors "or" as boolean OR
         conditions.append(
             """(
                 to_tsvector('portuguese', coalesce(descricao_curta, ''))
-                    @@ websearch_to_tsquery('portuguese', %s)
+                    @@ websearch_to_tsquery('portuguese', %(keywords)s)
                 or id in (
                     select startup_id from documentos
                     where to_tsvector('portuguese', titulo || ' ' || conteudo_texto)
-                        @@ websearch_to_tsquery('portuguese', %s)
+                        @@ websearch_to_tsquery('portuguese', %(keywords)s)
                 )
             )"""
         )
-        params.extend([query_text, query_text])
+        # Ranks a text match by how well it matches, instead of just whether
+        # it does — this is the main relevance signal once the dataset has
+        # more rows than RETRIEVER_TOP_K_STARTUPS. Scored as two terms, not
+        # one, because the WHERE clause above matches a startup either via
+        # its own descricao_curta OR via its documentos — scoring only the
+        # former would give a documentos-only match (a real match) the same
+        # 0 contribution as no match at all, letting it lose an arbitrary
+        # tie-break against unrelated rows (caught in review).
+        score_parts.append(
+            "ts_rank_cd(to_tsvector('portuguese', coalesce(descricao_curta, '')),"
+            " websearch_to_tsquery('portuguese', %(keywords)s))"
+        )
+        score_parts.append(
+            """coalesce((
+                select max(ts_rank_cd(
+                    to_tsvector('portuguese', d.titulo || ' ' || d.conteudo_texto),
+                    websearch_to_tsquery('portuguese', %(keywords)s)
+                ))
+                from documentos d
+                where d.startup_id = startups.id
+            ), 0)"""
+        )
 
     # Any criterion that matches contributes candidates — OR, not AND. A
     # free-text "setor" guessed by Query Planner (e.g. "Atendimento por
@@ -126,7 +161,15 @@ def _search_startups(criteria: SearchCriteria) -> list[dict]:
     # (found live: an AND version returned 0 results for a query that
     # should have surfaced Fintalk).
     where_clause = " or ".join(conditions) if conditions else "true"
-    params.append(RETRIEVER_TOP_K_STARTUPS)
+    # `(0)::numeric` rather than a bare `0`: Postgres's ORDER BY grammar
+    # treats a plain integer constant as an ordinal column reference (e.g.
+    # `order by 0` errors with "ORDER BY position 0 is not in select list"
+    # instead of sorting by the literal value) — the cast makes it a real
+    # expression instead of a constant, avoiding that special-case entirely
+    # (caught by actually running the empty-criteria case, not just reasoning
+    # about it).
+    score_expr = " + ".join(score_parts) if score_parts else "(0)::numeric"
+    params["top_k"] = RETRIEVER_TOP_K_STARTUPS
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -135,7 +178,8 @@ def _search_startups(criteria: SearchCriteria) -> list[dict]:
                    ano_fundacao, tamanho_time
             from startups
             where {where_clause}
-            limit %s
+            order by ({score_expr}) desc, id
+            limit %(top_k)s
             """,
             params,
         )
