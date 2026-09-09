@@ -1,4 +1,6 @@
-from fastapi import APIRouter
+from cohere.errors import TooManyRequestsError
+from fastapi import APIRouter, HTTPException
+from openai import APIError, APITimeoutError
 from pydantic import BaseModel
 
 from radar_backend.agents.graph import build_graph
@@ -92,15 +94,35 @@ def run_analysis(request: AnalysisRequest) -> dict:
     The frontend shows a loading state while this request is in flight.
     """
     graph = build_graph()
-    result = graph.invoke(
-        {
-            "user_query": request.query,
-            "search_criteria": None,
-            "analysis_strategy": None,
-            "startups": [],
-            "final_briefing": None,
-        }
-    )
+    try:
+        result = graph.invoke(
+            {
+                "user_query": request.query,
+                "search_criteria": None,
+                "analysis_strategy": None,
+                "startups": [],
+                "final_briefing": None,
+            }
+        )
+    except (APITimeoutError, APIError, ValueError, TooManyRequestsError) as exc:
+        # chat_json() (agents/llm.py) already retries transient NVIDIA NIM
+        # errors 3x before giving up (APITimeoutError/APIError for timeouts
+        # and bad responses, ValueError for empty/non-JSON content), and
+        # rerank() (rag/retrieve.py) retries Cohere 429s up to 8x — this
+        # only triggers once one of those is exhausted, i.e. a real
+        # outage/degradation, not a single blip. Without this handler the
+        # exception propagates unhandled, which Starlette's default error
+        # path doesn't reliably attach CORS headers to (observed live: the
+        # browser reports a "CORS blocked" network error instead of
+        # surfacing any status or message) — an explicit HTTPException goes
+        # through the normal response path instead, so the frontend gets a
+        # real status + message to show.
+        raise HTTPException(
+            status_code=503,
+            detail="A análise falhou porque um serviço externo (NVIDIA NIM ou Cohere) "
+            "não respondeu a tempo (free tier, instabilidade intermitente já observada). "
+            "Tente novamente.",
+        ) from exc
     return {
         "startups": result["startups"],
         "final_briefing": result["final_briefing"],
