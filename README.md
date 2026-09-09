@@ -33,7 +33,11 @@ frontend/   Dashboard em Next.js (gerenciado com npm)
    - `backend/db/seed/scraped_batch.sql` — 23 startups adicionais, coletadas pelo pipeline em `backend/src/radar_backend/ingestion/`.
    - `backend/db/seed/new_startups_seed.sql` — 19 startups adicionais (50 no total), verificadas individualmente quanto à fundação no Brasil e com no mínimo 3 documentos reais e citáveis cada uma.
    - `backend/db/migrations/0002_nvidia_kb.sql` — cria a tabela `nvidia_kb_chunks` (pgvector + tsvector) para a base de conhecimento NVIDIA.
-   - `backend/db/seed/nvidia_kb_seed.sql` — 520 chunks (24 fontes do brief §8), com embeddings. **~10MB**: o SQL Editor web pode travar nesse tamanho — prefira rodar via `psql` ou `psycopg` (veja `backend/src/radar_backend/rag/nvidia_kb.py`).
+   - `backend/db/seed/nvidia_kb_seed.sql` — 520 chunks (24 fontes do brief §8), com embeddings. **~10MB**: o SQL Editor web pode travar nesse tamanho — rode com o script abaixo em vez de colar no editor (funciona pra qualquer um dos arquivos de migração/seed acima também, se preferir):
+     ```bash
+     cd backend
+     uv run python -m radar_backend.db.apply_sql db/seed/nvidia_kb_seed.sql
+     ```
 3. Pegue a connection string em **Connect → Direct connection/Session pooler → URI**. **Use a Session pooler** (porta 5432, host `aws-0-<região>.pooler.supabase.com`), não a "Direct connection": o hostname da Direct connection só tem registro DNS IPv6, e falha em redes sem IPv6 (comum em conexões domésticas no Brasil).
 
 ### Backend
