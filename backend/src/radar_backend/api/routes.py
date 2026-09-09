@@ -1,8 +1,15 @@
 from fastapi import APIRouter
+from pydantic import BaseModel
 
+from radar_backend.agents.graph import build_graph
+from radar_backend.db.session import get_connection
 from radar_backend.rag.retrieve import hybrid_search
 
 router = APIRouter()
+
+_STARTUP_COLUMNS = (
+    "id, nome, site, setor, estagio, localizacao, descricao_curta, ano_fundacao, tamanho_time"
+)
 
 
 @router.get("/health")
@@ -29,3 +36,72 @@ def rag_search(q: str) -> list[dict]:
         }
         for chunk in hybrid_search(q)
     ]
+
+
+@router.get("/startups")
+def list_startups(
+    q: str | None = None,
+    setor: str | None = None,
+    estagio: str | None = None,
+    porte: str | None = None,
+) -> list[dict]:
+    """Browse/filter view for the dashboard (Phase 7) — plain substring
+    filters over `startups`, AND'd together (unlike the Retriever's OR
+    search in agents/graph.py, which optimizes for recall during analysis;
+    here the user is narrowing an already-visible list, so AND is the
+    expected browsing behavior). `q` free-texts across nome/descricao_curta.
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    if q:
+        conditions.append("(nome ilike %s or descricao_curta ilike %s)")
+        params.extend([f"%{q}%", f"%{q}%"])
+    if setor:
+        conditions.append("setor ilike %s")
+        params.append(f"%{setor}%")
+    if estagio:
+        conditions.append("estagio ilike %s")
+        params.append(f"%{estagio}%")
+    if porte:
+        conditions.append("tamanho_time ilike %s")
+        params.append(f"%{porte}%")
+
+    where_clause = " and ".join(conditions) if conditions else "true"
+
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"select {_STARTUP_COLUMNS} from startups where {where_clause} order by nome",
+            params,
+        )
+        columns = [col.name for col in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+class AnalysisRequest(BaseModel):
+    query: str
+
+
+@router.post("/analysis")
+def run_analysis(request: AnalysisRequest) -> dict:
+    """Triggers a full run of the Phase 5 LangGraph pipeline for a
+    natural-language query and returns the final state. Blocking on purpose
+    — a run over the whole dataset takes low minutes, and building an async
+    job/polling flow wasn't worth the time against a 5-point UI weight (see
+    CLAUDE.md's "Interface web" barema line) for a submission due in a day.
+    The frontend shows a loading state while this request is in flight.
+    """
+    graph = build_graph()
+    result = graph.invoke(
+        {
+            "user_query": request.query,
+            "search_criteria": None,
+            "analysis_strategy": None,
+            "startups": [],
+            "final_briefing": None,
+        }
+    )
+    return {
+        "startups": result["startups"],
+        "final_briefing": result["final_briefing"],
+    }
