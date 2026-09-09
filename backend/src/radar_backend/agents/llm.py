@@ -13,11 +13,18 @@ from openai import APIError, APITimeoutError, OpenAI
 
 from radar_backend.core.config import get_settings
 
-REQUEST_TIMEOUT_SECONDS = 30.0
+REQUEST_TIMEOUT_SECONDS = 45.0
 # This account's free-tier NIM endpoint has shown the same kind of
 # intermittent flakiness (timeouts, occasional 500s) the Cohere trial key
 # did in rag/retrieve.py's rerank() — retry through it rather than let one
-# blip fail an entire node's pass over a batch of startups.
+# blip fail an entire node's pass over a batch of startups. Bumped from 30s
+# after live testing during the dataset-expansion QA pass hit 3 consecutive
+# timeouts in a row (including on a single-startup Recommendation call that
+# had completed in seconds earlier the same day) while a minimal direct
+# chat_json() call succeeded in ~2s — pointing at queueing/latency under
+# load on the larger recommendation prompt (max_tokens=700 + full context)
+# rather than a full outage, so more headroom before giving up is the right
+# knob, not a code fix.
 MAX_CHAT_ATTEMPTS = 3
 CHAT_RETRY_DELAY_SECONDS = 3
 
