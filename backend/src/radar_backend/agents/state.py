@@ -91,7 +91,8 @@ class StartupAnalysis(TypedDict, total=False):
     evidence_notes: str | None
     retry_count: int  # bounded at 1 — see graph.py's Validator routing
 
-    # Rule Matcher (Phase 8 diferencial — deterministic cross-check)
+    # Phase 8 diferencial — agents.rules.match_rules's deterministic
+    # cross-check, computed inline in the Recommendation node (graph.py)
     regras_correspondentes: list[RuleMatch]
 
     # NVIDIA RAG

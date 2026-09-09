@@ -2,17 +2,21 @@
 
   Query Planner -> Retriever -> Extractor -> Startup Classifier
   -> Evidence Validator -(retry)-> Retriever
-                         -(continue)-> Rule Matcher -> NVIDIA RAG
-                                        -> Recommendation -> Briefing
+                         -(continue)-> NVIDIA RAG -> Recommendation -> Briefing
 
-The brief's 8 nodes are all real, plus a 9th, Rule Matcher (Phase 8): a
-deterministic keyword-table cross-check (agents/rules.py) that runs
-independently of the LLM and gives Recommendation a second opinion to
-compare against — see rules.py's module docstring for why. Retriever and
-NVIDIA RAG hit Postgres/rag/retrieve.py directly; Query Planner, Extractor,
-Startup Classifier, Evidence Validator, and Recommendation call the shared
-NVIDIA NIM chat client in agents/llm.py; Rule Matcher and Briefing are plain
-deterministic code, no LLM call.
+All 8 nodes are real. Retriever and NVIDIA RAG hit Postgres/rag/retrieve.py
+directly; Query Planner, Extractor, Startup Classifier, Evidence Validator,
+and Recommendation call the shared NVIDIA NIM chat client in agents/llm.py;
+Briefing is a plain aggregation of the final state, no LLM call.
+
+Phase 8 diferencial: `recommendation()` also runs a deterministic
+keyword-table cross-check (agents/rules.py's `match_rules`/`cross_check`),
+independent of the LLM, and compares its output against the LLM's own
+`tecnologias_recomendadas` — see rules.py's module docstring for why. This
+was originally its own graph node; folded into `recommendation()` instead
+since nothing else in the graph consumed its output and a whole node/edge/
+state-field for a single-consumer, non-branching lookup was unwarranted
+ceremony (caught in review).
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ import json
 from langgraph.graph import END, START, StateGraph
 
 from radar_backend.agents.llm import chat_json
-from radar_backend.agents.rules import match_rules
+from radar_backend.agents.rules import cross_check, match_rules
 from radar_backend.agents.state import (
     AgentState,
     NvidiaChunkMatch,
@@ -331,30 +335,20 @@ def needs_retry(state: AgentState) -> str:
     return "continue"
 
 
-def rule_cross_check(state: AgentState) -> dict:
-    """Phase 8 diferencial: runs the deterministic keyword-table cross-check
-    (agents/rules.py) over each validated startup's own profile,
-    independently of the LLM. Placed after Evidence Validator's "continue"
-    branch so it only runs once per startup (not on every retry pass) and
-    has the Extractor's `structured_profile` available. Deliberately does
-    not use `search_criteria` — see rules.py's `_profile_haystack` docstring
-    for why that would bias every startup toward the same rule hits.
-    """
-    updated = []
-    for startup in state["startups"]:
-        row = startup.get("startup_row") or {}
-        profile = startup.get("structured_profile")
-        startup = dict(startup)
-        startup["regras_correspondentes"] = match_rules(row, profile)
-        updated.append(startup)
-    return {"startups": updated}
-
-
 def _build_nvidia_query(state: AgentState, startup: dict) -> str:
     """Query text for the NVIDIA KB search. Prefers the Extractor's
     `structured_profile` (once that node is filled in) since it's the most
     specific signal about the startup's actual stack/gaps; until then, falls
     back to the startup's own descricao_curta/setor plus the raw user query.
+
+    Flattens the same `structured_profile`/`startup_row` shape that
+    rules.py's `_profile_haystack` does, independently, for a different
+    purpose (a RAG query string here vs. a rule-matching haystack there). If
+    Extractor's output shape changes, both need updating — there's no
+    shared helper because their needs differ (this one wants every profile
+    field including non-string ones; that one wants a curated text-only
+    subset) and unifying them risked changing this already-verified RAG
+    query behavior just to deduplicate. Flagged here as a pointer, not fixed.
     """
     profile = startup.get("structured_profile")
     if profile:
@@ -417,20 +411,6 @@ Responda APENAS com JSON válido, sem markdown. Formato exato:
 }"""
 
 
-def _normalize_produto(nome: str) -> str:
-    """Loose match key for comparing an LLM-written technology name against
-    a rule table product name (e.g. "Riva" / "NVIDIA Riva (Speech AI)" /
-    "NVIDIA NeMo | AI Agents" — the LLM doesn't always echo the exact rule
-    table name, so this is used with substring containment, not equality).
-    """
-    return nome.lower().replace("nvidia", "").strip()
-
-
-def _rule_produto_in_recommendation(produto: str, tecnologias: list[str]) -> bool:
-    produto_norm = _normalize_produto(produto)
-    return any(produto_norm in _normalize_produto(t) for t in tecnologias)
-
-
 def _format_rule_matches(matches: list[dict]) -> str:
     if not matches:
         return "(nenhum sinal correspondeu à tabela de regras determinísticas)"
@@ -446,19 +426,22 @@ def recommendation(state: AgentState) -> dict:
     real `nvidia_chunks` retrieved earlier, not regenerated by the model, so
     citations stay traceable rather than risking a hallucinated url/id.
 
-    Phase 8 diferencial: the deterministic `regras_correspondentes` (Rule
-    Matcher) are passed to the LLM as hints it may use or ignore, then
-    compared against its actual `tecnologias_recomendadas` afterwards —
-    products both agree on become `concordancia_regras`; a rule match the
-    LLM didn't pick up becomes `alertas_regras`, a candidate false negative
-    to flag downstream in Briefing.
+    Phase 8 diferencial: `match_rules` runs here (see agents/rules.py) as a
+    deterministic second opinion, independent of the LLM. Its matches are
+    passed to the LLM as hints it may use or ignore, then `cross_check`
+    compares them against the LLM's actual `tecnologias_recomendadas`
+    afterwards — products both agree on become `concordancia_regras`; a
+    rule match the LLM didn't specifically confirm becomes `alertas_regras`,
+    a candidate false negative to flag downstream in Briefing (`cross_check`
+    also defends against a malformed/`null` LLM response here, which
+    previously could crash this whole node — see rules.py's docstring).
     """
     updated = []
     for startup in state["startups"]:
         row = startup.get("startup_row") or {}
         profile = startup.get("structured_profile") or {}
         chunks = startup.get("nvidia_chunks") or []
-        rule_matches = startup.get("regras_correspondentes") or []
+        rule_matches = match_rules(row, startup.get("structured_profile"))
         user_prompt = (
             f"Startup: {row.get('nome')}\n"
             f"Classificação: {startup.get('classification')}\n"
@@ -469,11 +452,11 @@ def recommendation(state: AgentState) -> dict:
             f"trechos acima realmente sustentam:\n{_format_rule_matches(rule_matches)}"
         )
         result = chat_json(RECOMMENDATION_SYSTEM_PROMPT, user_prompt, max_tokens=700)
-        tecnologias = result.get("tecnologias_recomendadas", [])
-        concordancia = [m["produto"] for m in rule_matches if _rule_produto_in_recommendation(m["produto"], tecnologias)]
-        alertas = [m["produto"] for m in rule_matches if not _rule_produto_in_recommendation(m["produto"], tecnologias)]
+        tecnologias = [t for t in (result.get("tecnologias_recomendadas") or []) if isinstance(t, str)]
+        concordancia, alertas = cross_check(rule_matches, tecnologias)
 
         startup = dict(startup)
+        startup["regras_correspondentes"] = rule_matches
         startup["recommendation"] = Recommendation(
             tecnologias_recomendadas=tecnologias,
             justificativa_tecnica=result.get("justificativa_tecnica", ""),
@@ -537,8 +520,9 @@ def briefing(state: AgentState) -> dict:
             alertas = rec.get("alertas_regras") or []
             if alertas:
                 lines.append(
-                    f"- ⚠ Regra determinística sugere possível ajuste adicional não citado pelo "
-                    f"LLM (revisar manualmente): {', '.join(alertas)}"
+                    f"- ⚠ Sinal de regra determinística não confirmado pelo LLM (pode ser uma "
+                    f"lacuna real ou um sinal genérico da tabela de regras — vale conferir "
+                    f"manualmente): {', '.join(alertas)}"
                 )
         lines.append("")
 
@@ -553,7 +537,6 @@ def build_graph():
     graph.add_node("extractor", extractor)
     graph.add_node("startup_classifier", startup_classifier)
     graph.add_node("evidence_validator", evidence_validator)
-    graph.add_node("rule_cross_check", rule_cross_check)
     graph.add_node("nvidia_rag", nvidia_rag)
     graph.add_node("recommendation", recommendation)
     graph.add_node("briefing", briefing)
@@ -566,9 +549,8 @@ def build_graph():
     graph.add_conditional_edges(
         "evidence_validator",
         needs_retry,
-        {"retry": "retriever", "continue": "rule_cross_check"},
+        {"retry": "retriever", "continue": "nvidia_rag"},
     )
-    graph.add_edge("rule_cross_check", "nvidia_rag")
     graph.add_edge("nvidia_rag", "recommendation")
     graph.add_edge("recommendation", "briefing")
     graph.add_edge("briefing", END)
