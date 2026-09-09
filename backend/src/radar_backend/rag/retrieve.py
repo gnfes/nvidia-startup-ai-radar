@@ -8,9 +8,11 @@ Run after: 0002_nvidia_kb.sql applied + nvidia_kb_seed.sql loaded.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import cohere
+from cohere.errors import TooManyRequestsError
 from openai import OpenAI
 
 from radar_backend.core.config import get_settings
@@ -20,6 +22,15 @@ VECTOR_CANDIDATES = 20
 LEXICAL_CANDIDATES = 20
 RRF_K = 60  # standard reciprocal-rank-fusion constant
 RERANK_TOP_N = 8
+
+# The Cohere key is a free trial (10 req/min — CLAUDE.md's Phase 3/4 notes),
+# fine for one-off testing but a Phase 5 batch run over several startups can
+# legitimately burst past that. Rather than resize the batch around a
+# billing choice, retry through the rate limit: Cohere doesn't send a
+# Retry-After header on its 429s, so this waits a fixed interval sized to
+# clear the per-minute window.
+MAX_RERANK_ATTEMPTS = 8
+RERANK_RETRY_DELAY_SECONDS = 7
 
 
 @dataclass
@@ -131,12 +142,21 @@ def rerank(query_text: str, candidates: list[RetrievedChunk], top_n: int = RERAN
     if not settings.cohere_api_key or not candidates:
         return candidates[:top_n]
     client = cohere.ClientV2(api_key=settings.cohere_api_key)
-    response = client.rerank(
-        model=settings.cohere_rerank_model,
-        query=query_text,
-        documents=[c.conteudo_chunk for c in candidates],
-        top_n=top_n,
-    )
+
+    for attempt in range(1, MAX_RERANK_ATTEMPTS + 1):
+        try:
+            response = client.rerank(
+                model=settings.cohere_rerank_model,
+                query=query_text,
+                documents=[c.conteudo_chunk for c in candidates],
+                top_n=top_n,
+            )
+            break
+        except TooManyRequestsError:
+            if attempt == MAX_RERANK_ATTEMPTS:
+                raise
+            time.sleep(RERANK_RETRY_DELAY_SECONDS)
+
     reranked = []
     for result in response.results:
         chunk = candidates[result.index]
