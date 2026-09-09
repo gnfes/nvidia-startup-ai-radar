@@ -19,3 +19,12 @@ Thumbs.db
 # Anchored to root: a bare `CLAUDE.md` pattern matches at any depth and would
 # also swallow frontend/CLAUDE.md (an unrelated Next.js tooling pointer file).
 /CLAUDE.md
+
+# Claude Code's own local config (dev-server launch presets, etc.) — a
+# per-machine convenience, not project source. Anchored to root for the same
+# reason as CLAUDE.md above.
+/.claude/
+
+# Video-prep material (script, architecture reference page) — working files
+# for recording the presentation, not part of the delivered project.
+/docs/
