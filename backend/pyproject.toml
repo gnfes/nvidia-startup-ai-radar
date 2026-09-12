@@ -2,7 +2,6 @@
 name = "radar-backend"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
 authors = [
     { name = "guilherme.silva", email = "guilherme.silva@sou.inteli.edu.br" }
 ]
