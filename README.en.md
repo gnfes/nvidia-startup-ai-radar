@@ -7,6 +7,9 @@ database, diagnoses AI-native maturity, and recommends NVIDIA technologies
 via a RAG pipeline with reranking. Built for the Inteli Academy x NVIDIA TAPI
 selection process.
 
+📐 Architecture documentation: [ARCHITECTURE.en.md](ARCHITECTURE.en.md) — how
+the agent pipeline and the hybrid RAG work, and why.
+
 ## Stack
 
 - Backend: Python, FastAPI, LangGraph, Postgres (Supabase) + pgvector

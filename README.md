@@ -8,6 +8,9 @@ e recomenda tecnologias NVIDIA por meio de um pipeline de RAG com
 reranking. Desenvolvido para o processo seletivo do TAPI Inteli Academy x
 NVIDIA.
 
+📐 Documentação de arquitetura: [ARCHITECTURE.md](ARCHITECTURE.md) — como o
+pipeline de agentes e o RAG híbrido funcionam, e por quê.
+
 ## Stack
 
 - Backend: Python, FastAPI, LangGraph, Postgres (Supabase) + pgvector
